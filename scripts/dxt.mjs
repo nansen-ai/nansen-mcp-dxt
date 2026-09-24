@@ -135,7 +135,9 @@ export function releaseAgeCutoff(now = Date.now()) {
 
 function loadUpstream() {
   const upstream = readJson(PATHS.upstream);
+  // repository, path and ref all go into a GitHub URL: accept only fixed values or a SHA.
   if (upstream.repository !== 'nansen-ai/nansen-cli') fail('config/upstream.json repository must be nansen-ai/nansen-cli');
+  if (upstream.path !== 'src/mcp-client-config.json') fail('config/upstream.json path must be src/mcp-client-config.json');
   if (!SHA.test(upstream.ref ?? '')) fail('config/upstream.json ref must be a full 40-character commit SHA');
   return upstream;
 }
