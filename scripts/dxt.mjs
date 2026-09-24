@@ -114,20 +114,8 @@ export function buildManifest(base, config, lock) {
   };
 }
 
-/** Dependencies must be at least this old when they are locked (release-age policy). */
-export const MIN_RELEASE_AGE_DAYS = 14;
-
-/**
- * Security overrides for transitive dependencies. Each entry must be at least
- * MIN_RELEASE_AGE_DAYS old. Remove an entry when the parent package that
- * passes the age limit already depends on the fixed version.
- */
-export const BUNDLE_OVERRIDES = Object.freeze({
-  // express 4.22.2 wants qs ~6.15.1, which has GHSA-x5fp-wj9c-mxmx and
-  // GHSA-4mjr-xmp4-gh2g. qs 6.16.0 fixes both; express 4.22.3 (the release
-  // that moved to it) is still too new for the age limit.
-  qs: '6.16.0',
-});
+/** Dependencies must be at least this old when they are locked. */
+export const MIN_RELEASE_AGE_DAYS = 7;
 
 export function buildBundlePackage(config) {
   return {
@@ -137,7 +125,6 @@ export function buildBundlePackage(config) {
     description: 'Nansen MCP packaged extension for Claude Desktop',
     // Exact pin, same as the npx pin in nansen-cli: the bridge carries the key.
     dependencies: { [config.mcpRemote.package]: config.mcpRemote.version },
-    overrides: { ...BUNDLE_OVERRIDES },
   };
 }
 

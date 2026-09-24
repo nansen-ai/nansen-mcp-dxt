@@ -5,8 +5,5 @@
   "description": "Nansen MCP packaged extension for Claude Desktop",
   "dependencies": {
     "mcp-remote": "0.2.1"
-  },
-  "overrides": {
-    "qs": "6.16.0"
   }
 }
