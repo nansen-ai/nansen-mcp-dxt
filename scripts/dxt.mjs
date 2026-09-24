@@ -42,7 +42,8 @@ const SHA = /^[0-9a-f]{40}$/;
 const PROXY = 'node_modules/mcp-remote/dist/proxy.js';
 
 const sha256 = data => createHash('sha256').update(data).digest('hex');
-const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+// Call sites pass a constant PATHS entry straight to readFileSync; no path is a parameter.
+const parseJson = text => JSON.parse(text);
 const toJson = value => `${JSON.stringify(value, null, 2)}\n`;
 
 function fail(message) {
@@ -120,7 +121,7 @@ export const MIN_RELEASE_AGE_DAYS = 7;
 export function buildBundlePackage(config) {
   return {
     name: 'nansen-mcp',
-    version: readJson(PATHS.base).version,
+    version: parseJson(fs.readFileSync(PATHS.base, 'utf8')).version,
     private: true,
     description: 'Nansen MCP packaged extension for Claude Desktop',
     // Exact pin, same as the npx pin in nansen-cli: the bridge carries the key.
@@ -134,7 +135,7 @@ export function releaseAgeCutoff(now = Date.now()) {
 }
 
 function loadUpstream() {
-  const upstream = readJson(PATHS.upstream);
+  const upstream = parseJson(fs.readFileSync(PATHS.upstream, 'utf8'));
   // repository, path and ref all go into a GitHub URL: accept only fixed values or a SHA.
   if (upstream.repository !== 'nansen-ai/nansen-cli') fail('config/upstream.json repository must be nansen-ai/nansen-cli');
   if (upstream.path !== 'src/mcp-client-config.json') fail('config/upstream.json path must be src/mcp-client-config.json');
@@ -143,9 +144,9 @@ function loadUpstream() {
 }
 
 export function generated() {
-  const config = validateConfig(readJson(PATHS.config));
-  const base = readJson(PATHS.base);
-  const lock = fs.existsSync(PATHS.bundleLock) ? readJson(PATHS.bundleLock) : {};
+  const config = validateConfig(parseJson(fs.readFileSync(PATHS.config, 'utf8')));
+  const base = parseJson(fs.readFileSync(PATHS.base, 'utf8'));
+  const lock = fs.existsSync(PATHS.bundleLock) ? parseJson(fs.readFileSync(PATHS.bundleLock, 'utf8')) : {};
   return { manifest: toJson(buildManifest(base, config, lock)), bundlePackage: toJson(buildBundlePackage(config)), config };
 }
 
@@ -165,7 +166,7 @@ export function checkProblems() {
   if (fs.readFileSync(PATHS.manifest, 'utf8') !== manifest) problems.push(`bundle/manifest.json is out of date. ${FIX_HINT}`);
   if (fs.readFileSync(PATHS.bundlePackage, 'utf8') !== bundlePackage) problems.push(`bundle/package.json is out of date. ${FIX_HINT}`);
 
-  const lock = readJson(PATHS.bundleLock);
+  const lock = parseJson(fs.readFileSync(PATHS.bundleLock, 'utf8'));
   const locked = lock.packages?.['node_modules/mcp-remote']?.version;
   if (locked !== config.mcpRemote.version) {
     problems.push(`bundle/package-lock.json locks mcp-remote ${locked}, expected ${config.mcpRemote.version}. Run: npm run build`);
