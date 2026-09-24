@@ -114,6 +114,21 @@ export function buildManifest(base, config, lock) {
   };
 }
 
+/** Dependencies must be at least this old when they are locked (release-age policy). */
+export const MIN_RELEASE_AGE_DAYS = 14;
+
+/**
+ * Security overrides for transitive dependencies. Each entry must be at least
+ * MIN_RELEASE_AGE_DAYS old. Remove an entry when the parent package that
+ * passes the age limit already depends on the fixed version.
+ */
+export const BUNDLE_OVERRIDES = Object.freeze({
+  // express 4.22.2 wants qs ~6.15.1, which has GHSA-x5fp-wj9c-mxmx and
+  // GHSA-4mjr-xmp4-gh2g. qs 6.16.0 fixes both; express 4.22.3 (the release
+  // that moved to it) is still too new for the age limit.
+  qs: '6.16.0',
+});
+
 export function buildBundlePackage(config) {
   return {
     name: 'nansen-mcp',
@@ -122,7 +137,13 @@ export function buildBundlePackage(config) {
     description: 'Nansen MCP packaged extension for Claude Desktop',
     // Exact pin, same as the npx pin in nansen-cli: the bridge carries the key.
     dependencies: { [config.mcpRemote.package]: config.mcpRemote.version },
+    overrides: { ...BUNDLE_OVERRIDES },
   };
+}
+
+/** The newest publish time that `npm install --before` may lock. */
+export function releaseAgeCutoff(now = Date.now()) {
+  return new Date(now - MIN_RELEASE_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function loadUpstream() {
@@ -268,7 +289,8 @@ function build() {
   // package.json first, then re-lock and install exactly the lock, then the
   // manifest (its Node floor comes from the lock).
   fs.writeFileSync(PATHS.bundlePackage, generated().bundlePackage);
-  execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: bundle, stdio: 'inherit' });
+  // --before keeps every newly locked version at least MIN_RELEASE_AGE_DAYS old.
+  execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', `--before=${releaseAgeCutoff()}`], { cwd: bundle, stdio: 'inherit' });
   execFileSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: bundle, stdio: 'inherit' });
   writeGenerated();
   execFileSync('npx', ['--no-install', 'mcpb', 'validate', PATHS.manifest], { cwd: ROOT, stdio: 'inherit' });
