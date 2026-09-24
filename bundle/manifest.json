@@ -16,6 +16,11 @@
     "crypto"
   ],
   "license": "MIT",
+  "compatibility": {
+    "runtimes": {
+      "node": ">=20.18.1"
+    }
+  },
   "server": {
     "type": "node",
     "entry_point": "node_modules/mcp-remote/dist/proxy.js",

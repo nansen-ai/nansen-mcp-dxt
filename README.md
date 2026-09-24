@@ -15,11 +15,18 @@ The connection settings (endpoint, `NANSEN-API-KEY` header, API-key URL, exact `
 | `bundle/package.json`, `bundle/package-lock.json` | No | Exact `mcp-remote` pin from the config (`npm run build`) |
 | `nansen.dxt` | No | Packed from `bundle/` with `@anthropic-ai/mcpb` (`npm run build`) |
 
-Do not edit generated files by hand. CI (`.github/workflows/check.yml`) fails when they drift from the config, when the config copy does not match its checksum or the upstream file, or when `nansen.dxt` holds a different manifest or `mcp-remote` version.
+Do not edit generated files by hand. CI (`.github/workflows/check.yml`) fails when:
+
+- a generated file drifts from the config;
+- the config copy does not match its checksum, or the upstream file at the pinned commit;
+- the pinned commit is not on nansen-cli `main` (merge nansen-cli first);
+- any file in `nansen.dxt` differs from what `npm ci` installs from `bundle/package-lock.json`.
+
+The manifest sets `compatibility.runtimes.node` from the strictest Node engine in the lock (today `>=20.18.1`, from `undici`).
 
 ## How to update
 
-Node.js 20 or later and `unzip` are required.
+Node.js 20.18.1 or later and `unzip` are required (macOS or Linux; the scripts do not support Windows).
 
 ```bash
 npm ci
@@ -28,6 +35,6 @@ npm run build                                   # after you edit manifest.base.j
 npm run check                                   # offline drift check
 ```
 
-Commit every changed file, including `nansen.dxt`. A weekly job fails when nansen-cli `main` has a newer config than the pinned commit.
+When the bundle changes, bump `"version"` in `manifest.base.json` and run `npm run build` again. `npm run build` keeps the committed `nansen.dxt` when its contents are already current (zip timestamps would otherwise change it on every build), so commit `nansen.dxt` only when it changed. nansen-cli runs a weekly check that opens an issue when this repo pins an older config.
 
 The `mcp-remote` pin is owned by nansen-cli; see its `AGENTS.md` > MCP client config for the review and bump process.

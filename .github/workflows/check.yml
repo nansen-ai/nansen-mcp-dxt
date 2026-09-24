@@ -31,15 +31,24 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # Install the bundle exactly from its committed lock, so the check can
+      # compare every file packed in nansen.dxt with what npm installs.
+      - name: Install the bundle dependencies
+        run: npm ci --prefix bundle --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Validate the manifest
         run: npm run validate
 
       - name: Check generated files and nansen.dxt (offline)
         run: npm run check
 
+      # Also requires the pinned commit to be on nansen-cli main, so this step
+      # stays red until the canonical change is merged there.
       - name: Compare the vendored config to the pinned nansen-cli commit
         if: github.event_name != 'schedule'
-        run: npm run verify-upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run verify-upstream -- --require-main
 
       - name: Compare the vendored config to nansen-cli main
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

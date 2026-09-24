@@ -17,6 +17,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,10 +70,27 @@ export function validateConfig(config) {
   return config;
 }
 
-export function buildManifest(base, config) {
+/**
+ * The strictest `>=x.y.z` Node engine in the bundle lock (for example undici 7
+ * needs >=20.18.1). Claude Desktop reads compatibility.runtimes.node, so a user
+ * whose Node is too old gets a clear message instead of a crash at startup.
+ */
+export function minimumNode(lock) {
+  let best = [0, 0, 0];
+  for (const meta of Object.values(lock.packages ?? {})) {
+    const match = /^\s*>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec(meta?.engines?.node ?? '');
+    if (!match) continue;
+    const version = [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
+    if (version[0] > best[0] || (version[0] === best[0] && (version[1] > best[1] || (version[1] === best[1] && version[2] > best[2])))) best = version;
+  }
+  return `>=${best.join('.')}`;
+}
+
+export function buildManifest(base, config, lock) {
   const envVar = config.apiKeyEnvVar;
   return {
     ...base,
+    compatibility: { ...base.compatibility, runtimes: { ...base.compatibility?.runtimes, node: minimumNode(lock) } },
     server: {
       type: 'node',
       entry_point: PROXY,
@@ -117,7 +135,8 @@ function loadUpstream() {
 export function generated() {
   const config = validateConfig(readJson(PATHS.config));
   const base = readJson(PATHS.base);
-  return { manifest: toJson(buildManifest(base, config)), bundlePackage: toJson(buildBundlePackage(config)), config };
+  const lock = fs.existsSync(PATHS.bundleLock) ? readJson(PATHS.bundleLock) : {};
+  return { manifest: toJson(buildManifest(base, config, lock)), bundlePackage: toJson(buildBundlePackage(config)), config };
 }
 
 function unzip(file, member) {
@@ -159,7 +178,53 @@ export function checkProblems() {
   } catch (err) {
     problems.push(`could not inspect nansen.dxt: ${err.message.split('\n')[0]}. Run: npm run build`);
   }
+  if (fs.existsSync(at('bundle', 'node_modules', 'mcp-remote'))) problems.push(...compareDxtToBundle());
   return problems;
+}
+
+// Files @anthropic-ai/mcpb 2.x leaves out by default. A missing file is low
+// risk; the strict direction is "every packed file matches bundle/".
+const MCPB_DEFAULT_IGNORE = /(^|\/)(package-lock\.json|tsconfig\.json|\.eslintrc(\.\w+)?|\.nycrc(\.\w+)?|\.editorconfig|\.bin\/.*)$|\.d\.ts$/;
+
+function hashTree(dir) {
+  const hashes = new Map();
+  const walk = rel => {
+    for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile()) hashes.set(child, sha256(fs.readFileSync(path.join(dir, child))));
+    }
+  };
+  walk('');
+  return hashes;
+}
+
+/**
+ * Every file in nansen.dxt must be byte-identical to the same path in bundle/
+ * after `npm ci` from the committed lock, so a tampered or stale runtime file
+ * in the binary cannot pass review. Needs bundle/node_modules (`npm run build`
+ * or `npm ci --prefix bundle`); skipped when it is absent.
+ */
+export function compareDxtToBundle(dxtPath = PATHS.dxt, bundleDir = at('bundle')) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nansen-dxt-'));
+  try {
+    execFileSync('unzip', ['-q', dxtPath, '-d', tmp]);
+    const packed = hashTree(tmp);
+    const local = hashTree(bundleDir);
+    const problems = [];
+    for (const [file, hash] of packed) {
+      if (!local.has(file)) problems.push(`nansen.dxt has ${file}, which is not in bundle/`);
+      else if (local.get(file) !== hash) problems.push(`nansen.dxt has a different ${file} than bundle/`);
+    }
+    for (const file of local.keys()) {
+      // mcpb drops these by default; everything else must be packed.
+      if (MCPB_DEFAULT_IGNORE.test(file)) continue;
+      if (!packed.has(file)) problems.push(`bundle/${file} is missing from nansen.dxt`);
+    }
+    return problems.length ? [...problems.slice(0, 10), ...(problems.length > 10 ? [`...and ${problems.length - 10} more`] : []), 'Run: npm run build'] : [];
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 async function fetchUpstream(upstream, ref) {
@@ -169,10 +234,23 @@ async function fetchUpstream(upstream, ref) {
   return { url, data: Buffer.from(await response.arrayBuffer()) };
 }
 
+function githubHeaders(accept) {
+  const headers = { Accept: accept, 'User-Agent': 'nansen-mcp-dxt' };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+async function isOnMain(repository, ref) {
+  const response = await fetch(`https://api.github.com/repos/${repository}/compare/main...${ref}`, { headers: githubHeaders('application/vnd.github+json') });
+  if (!response.ok) fail(`GitHub compare returned HTTP ${response.status}`);
+  const { status } = await response.json();
+  return status === 'identical' || status === 'behind';
+}
+
 async function resolveRef(repository, ref) {
   if (SHA.test(ref)) return ref;
   const response = await fetch(`https://api.github.com/repos/${repository}/commits/${encodeURIComponent(ref)}`, {
-    headers: { Accept: 'application/vnd.github.sha' },
+    headers: githubHeaders('application/vnd.github.sha'),
   });
   const sha = (await response.text()).trim();
   if (!response.ok || !SHA.test(sha)) fail(`could not resolve ${ref} in ${repository}`);
@@ -186,12 +264,20 @@ function writeGenerated() {
 }
 
 function build() {
-  writeGenerated();
   const bundle = at('bundle');
-  // Re-lock from bundle/package.json, then install exactly the lock.
+  // package.json first, then re-lock and install exactly the lock, then the
+  // manifest (its Node floor comes from the lock).
+  fs.writeFileSync(PATHS.bundlePackage, generated().bundlePackage);
   execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: bundle, stdio: 'inherit' });
   execFileSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: bundle, stdio: 'inherit' });
+  writeGenerated();
   execFileSync('npx', ['--no-install', 'mcpb', 'validate', PATHS.manifest], { cwd: ROOT, stdio: 'inherit' });
+  // Zip timestamps make every pack differ. Keep the committed file when its
+  // contents already match, so a no-op build leaves no binary diff.
+  if (fs.existsSync(PATHS.dxt) && checkProblems().length === 0) {
+    console.log('nansen.dxt contents are current; kept the committed file.');
+    return;
+  }
   execFileSync('npx', ['--no-install', 'mcpb', 'pack', bundle, PATHS.dxt], { cwd: ROOT, stdio: 'inherit' });
 }
 
@@ -210,33 +296,54 @@ async function main(argv) {
     }
     case 'verify-upstream': {
       const upstream = loadUpstream();
-      const { url, data } = await fetchUpstream(upstream, rest.includes('--latest') ? 'main' : upstream.ref);
+      const latest = rest.includes('--latest');
+      const { url, data } = await fetchUpstream(upstream, latest ? 'main' : upstream.ref);
       if (!data.equals(fs.readFileSync(PATHS.config))) {
-        console.error(`ERROR: config/mcp-client-config.json is not a byte-identical copy of ${url}.${rest.includes('--latest') ? ' Run: npm run sync -- --ref main' : ''}`);
+        console.error(`ERROR: config/mcp-client-config.json is not a byte-identical copy of ${url}.${latest ? ' Run: npm run sync -- --ref main' : ''}`);
+        return 1;
+      }
+      if (!latest && sha256(data) !== upstream.sha256) {
+        console.error('ERROR: config/upstream.json sha256 does not match the upstream file');
+        return 1;
+      }
+      if (rest.includes('--require-main') && !(await isOnMain(upstream.repository, upstream.ref))) {
+        console.error(`ERROR: the pinned ref ${upstream.ref.slice(0, 12)} is not on nansen-cli main. Merge the nansen-cli change first, then run: npm run sync -- --ref main`);
         return 1;
       }
       console.log(`config/mcp-client-config.json matches ${url}`);
       return 0;
     }
     case 'sync': {
+      // No default: `npm run sync --ref x` (without `--`) passes nothing, and
+      // silently syncing main would be a different pin than the one asked for.
       const refIndex = rest.indexOf('--ref');
-      const ref = refIndex === -1 ? 'main' : rest[refIndex + 1];
-      if (!ref) fail('--ref requires a value');
+      const ref = refIndex === -1 ? undefined : rest[refIndex + 1];
+      if (!ref || ref.startsWith('-')) fail('Usage: npm run sync -- --ref <nansen-cli commit SHA or main>');
       const upstream = loadUpstream();
       const sha = await resolveRef(upstream.repository, ref);
       const { url, data } = await fetchUpstream(upstream, sha);
       validateConfig(JSON.parse(data.toString('utf8')));
-      fs.writeFileSync(PATHS.config, data);
-      fs.writeFileSync(PATHS.upstream, toJson({ ...upstream, ref: sha, sha256: sha256(data) }));
-      console.log(`Vendored ${url}`);
-      build();
+      // Restore every file if the build fails, so a failed sync leaves no mix
+      // of a new config and an old bundle.
+      const tracked = [PATHS.config, PATHS.upstream, PATHS.manifest, PATHS.bundlePackage, PATHS.bundleLock, PATHS.dxt];
+      const saved = new Map(tracked.filter(f => fs.existsSync(f)).map(f => [f, fs.readFileSync(f)]));
+      try {
+        fs.writeFileSync(PATHS.config, data);
+        fs.writeFileSync(PATHS.upstream, toJson({ ...upstream, ref: sha, sha256: sha256(data) }));
+        console.log(`Vendored ${url}`);
+        build();
+      } catch (err) {
+        for (const [file, bytes] of saved) fs.writeFileSync(file, bytes);
+        throw err;
+      }
+      console.log('Bump "version" in manifest.base.json if the bundle changed, then run: npm run build');
       return 0;
     }
     case 'build':
       build();
       return 0;
     default:
-      console.error('Usage: node scripts/dxt.mjs <generate|check|sync [--ref <sha>]|verify-upstream [--latest]|build>');
+      console.error('Usage: node scripts/dxt.mjs <generate|check|sync --ref <sha>|verify-upstream [--latest|--require-main]|build>');
       return 1;
   }
 }
