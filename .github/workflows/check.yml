@@ -1,0 +1,55 @@
+name: check
+# API-322: the extension is generated from the canonical nansen-cli MCP client
+# config. Fail on any drift between the vendored config, the generated bundle
+# files and the committed nansen.dxt.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '29 6 * * 1' # Mondays 06:29 UTC: compare to nansen-cli main
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      # Install the bundle exactly from its committed lock, so the check can
+      # compare every file packed in nansen.dxt with what npm installs.
+      - name: Install the bundle dependencies
+        run: npm ci --prefix bundle --omit=dev --ignore-scripts --no-audit --no-fund
+
+      - name: Validate the manifest
+        run: npm run validate
+
+      - name: Check generated files and nansen.dxt (offline)
+        run: npm run check
+
+      # Also requires the pinned commit to be on nansen-cli main, so this step
+      # stays red until the canonical change is merged there.
+      - name: Compare the vendored config to the pinned nansen-cli commit
+        if: github.event_name != 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run verify-upstream -- --require-main
+
+      - name: Compare the vendored config to nansen-cli main
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm run verify-upstream -- --latest

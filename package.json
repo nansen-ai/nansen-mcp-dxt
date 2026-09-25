@@ -1,0 +1,20 @@
+{
+  "name": "nansen-mcp-dxt-build",
+  "private": true,
+  "description": "Builds nansen.dxt (Claude Desktop extension) from the canonical nansen-cli MCP client config",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "generate": "node scripts/dxt.mjs generate",
+    "check": "node scripts/dxt.mjs check",
+    "sync": "node scripts/dxt.mjs sync",
+    "verify-upstream": "node scripts/dxt.mjs verify-upstream",
+    "build": "node scripts/dxt.mjs build",
+    "validate": "mcpb validate bundle/manifest.json"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

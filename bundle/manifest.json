@@ -1,0 +1,49 @@
+{
+  "dxt_version": "0.1",
+  "name": "Nansen",
+  "version": "1.1.0",
+  "description": "Access Nansen's onchain intelligence for multichain analytics, wallet labels, and Smart Money insights. Track market behavior, identify opportunities, and understand who's behind onchain activities with proprietary data labeling on hundreds of millions of addresses.",
+  "long_description": "## Nansen MCP - Surface the Signal, Become Smart Money\n\nThe **Nansen MCP** provides programmatic access to Nansen's comprehensive blockchain analytics platform across **20+ networks**. Leveraging proprietary wallet labeling that identifies hundreds of millions of addresses - from exchanges to notable traders - it transforms pseudonymous blockchain data into actionable intelligence.\n\n### Key Features\n\n- **Smart Money** - Track verified profitable traders and institutional funds\n- **Token Analytics** - Comprehensive token metrics, holder distributions, and flow intelligence\n- **Wallet Profiling** - Deep analysis including PnL tracking, counterparties, and cross-chain balances\n\nCore capabilities:\n- Real-time smart money tracking and netflow analysis\n- Advanced token discovery and screening\n- Multi-chain support including Ethereum, Solana, Base, Arbitrum, and others\n\n### Use Cases\n\nEssential for traders, researchers, and analysts needing institutional-grade onchain data to identify opportunities, track smart money movements, and gain market edge. Whether following top trader strategies, analyzing token flows, investigating wallet relationships, or conducting due diligence, the Nansen MCP provides the comprehensive blockchain intelligence needed for sophisticated analysis and alpha generation.",
+  "author": {
+    "name": "Nansen",
+    "url": "https://www.nansen.ai/"
+  },
+  "homepage": "https://app.nansen.ai/",
+  "support": "https://app.nansen.ai/help",
+  "icon": "logo.png",
+  "keywords": [
+    "blockchain analytics",
+    "crypto"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "runtimes": {
+      "node": ">=20.18.1"
+    }
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "node_modules/mcp-remote/dist/proxy.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/node_modules/mcp-remote/dist/proxy.js",
+        "https://mcp.nansen.ai/ra/mcp",
+        "--header",
+        "NANSEN-API-KEY:${NANSEN_API_KEY}"
+      ],
+      "env": {
+        "NANSEN_API_KEY": "${user_config.NANSEN_API_KEY}"
+      }
+    }
+  },
+  "user_config": {
+    "NANSEN_API_KEY": {
+      "type": "string",
+      "title": "Nansen API Key",
+      "description": "Create or copy one at https://app.nansen.ai/api?tab=api",
+      "required": true,
+      "sensitive": true
+    }
+  }
+}
